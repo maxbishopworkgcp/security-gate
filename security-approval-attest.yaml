@@ -1,0 +1,53 @@
+# Cloud Build: Security approval to sign an image digest and create a Binary Authorization attestation
+
+substitutions:
+  # Required inputs when running the trigger:
+  _IMAGE: ""           # full image *with* digest, e.g. us-east1-docker.pkg.dev/PROJECT/REPO/IMAGE@sha256:...
+  _ATTESTOR: ""        # attestor resource, e.g. projects/ATTESTOR_PROJECT/attestors/itsec-approver
+  _KEY_LOCATION: "us-east1"
+  _KEYRING: "binauthz-keys"
+  _KEY: "itsec-approver"
+  _KEY_VERSION: "1"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  # 1) Sanity check inputs
+  - id: "validate inputs"
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        [[ -n "$_IMAGE" && "$_IMAGE" == *"@sha256:"* ]] || { echo "ERROR: _IMAGE must include @sha256:..."; exit 2; }
+        [[ -n "$_ATTESTOR" ]] || { echo "ERROR: _ATTESTOR is required"; exit 2; }
+
+  # 2) Sign + create attestation with the IT-Sec KMS key
+  - id: "sign and create attestation"
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud beta container binauthz attestations sign-and-create \
+          --artifact-url="$_IMAGE" \
+          --attestor="$_ATTESTOR" \
+          --keyversion-project="$PROJECT_ID" \
+          --keyversion-location="$_KEY_LOCATION" \
+          --keyversion-keyring="$_KEYRING" \
+          --keyversion-key="$_KEY" \
+          --keyversion="$_KEY_VERSION" \
+          --format="json"
+
+  # 3) List the attestation we just created (for audit visibility in logs)
+  - id: "list attestation"
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud container binauthz attestations list \
+          --artifact-url="$_IMAGE" \
+          --attestor="$_ATTESTOR" \
+          --format="table(CREATE_TIME,RESOURCE_URI,PROJECT_ID)"
