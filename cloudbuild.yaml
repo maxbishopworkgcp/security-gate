@@ -3,7 +3,8 @@
 substitutions:
   # Required inputs when running the trigger:
   _IMAGE: "us-east1-docker.pkg.dev/warm-capsule-470118-i5/cicd-artifact-repo/bishopllc-storefront-app@sha256:4bebcd56ffeb3ee494ee19ea8e05b90aefb0084b0a157e028b598e1436df65f8"           # full image *with* digest, e.g. us-east1-docker.pkg.dev/PROJECT/REPO/IMAGE@sha256:...
-  _ATTESTOR: "projects/warm-capsule-470118-i5/attestors/itsec-approver"        # attestor resource, e.g. projects/warm-capsule-470118-i5/attestors/itsec-approver
+  _ATTESTOR: "itsec-approver"        # attestor resource, e.g. itsec-approver
+  _ATTESTOR_PROJECT: "warm-capsule-470118-i5" # attestor project i.e. warm-capsule-470118-i5
   _KEY_LOCATION: "us-east1"
   _KEYRING: "binauthz-keys"
   _KEY: "itsec-approver"
@@ -33,6 +34,7 @@ steps:
         gcloud beta container binauthz attestations sign-and-create \
           --artifact-url="$_IMAGE" \
           --attestor="$_ATTESTOR" \
+          --attestor-project="$_ATTESTOR_PROJECT" \
           --keyversion-project="$PROJECT_ID" \
           --keyversion-location="$_KEY_LOCATION" \
           --keyversion-keyring="$_KEYRING" \
