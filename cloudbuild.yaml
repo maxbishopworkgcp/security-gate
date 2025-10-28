@@ -12,7 +12,7 @@ options: { logging: CLOUD_LOGGING_ONLY }
 # Optional: two-person rule before signing
 approvals:
 - approvers:
-  - group:it-security@YOURDOMAIN.com      # Only Security can approve
+  - maxbishop.work.gcp@gmail.com      # Only Security can approve
 
 steps:
 - id: "extract image@digest from event"
