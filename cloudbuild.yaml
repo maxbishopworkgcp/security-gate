@@ -25,7 +25,7 @@ steps:
         [[ -n "$_ATTESTOR" ]] || { echo "ERROR: _ATTESTOR is required"; exit 2; }
 
   # 2) Sign + create attestation with the IT-Sec KMS key
-    - id: "sign and create attestation (idempotent)"
+  - id: "sign and create attestation (idempotent)"
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
     args:
