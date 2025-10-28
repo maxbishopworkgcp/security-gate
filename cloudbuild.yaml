@@ -25,22 +25,37 @@ steps:
         [[ -n "$_ATTESTOR" ]] || { echo "ERROR: _ATTESTOR is required"; exit 2; }
 
   # 2) Sign + create attestation with the IT-Sec KMS key
-  - id: "sign and create attestation"
+    - id: "sign and create attestation (idempotent)"
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
     args:
       - -ceu
       - |
-        gcloud beta container binauthz attestations sign-and-create \
-          --artifact-url="$_IMAGE" \
-          --attestor="$_ATTESTOR" \
-          --attestor-project="$_ATTESTOR_PROJECT" \
-          --keyversion-project="$PROJECT_ID" \
-          --keyversion-location="$_KEY_LOCATION" \
-          --keyversion-keyring="$_KEYRING" \
-          --keyversion-key="$_KEY" \
-          --keyversion="$_KEY_VERSION" \
-          --format="json"
+        set +e
+        OUT=$(
+          gcloud beta container binauthz attestations sign-and-create \
+            --artifact-url="$_IMAGE" \
+            --attestor="$_ATTESTOR" \
+            --attestor-project="$_ATTESTOR_PROJECT" \
+            --keyversion-project="$PROJECT_ID" \
+            --keyversion-location="$_KEY_LOCATION" \
+            --keyversion-keyring="$_KEYRING" \
+            --keyversion-key="$_KEY" \
+            --keyversion="$_KEY_VERSION" \
+            --format="json" 2>&1
+        )
+        STATUS=$?
+        set -e
+
+        if [[ $STATUS -ne 0 ]]; then
+          if grep -qi "subject of a conflict" <<< "$OUT"; then
+            echo "Attestation already exists; continuing."
+          else
+            echo "$OUT"
+            exit $STATUS
+          fi
+        fi
+
 
   # 3) List the attestation we just created (for audit visibility in logs)
   - id: "list attestation"
