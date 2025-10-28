@@ -1,66 +1,80 @@
-# Cloud Build: Security approval to sign an image digest and create a Binary Authorization attestation
-
 substitutions:
-  # Required inputs when running the trigger:
-  _IMAGE: "us-east1-docker.pkg.dev/warm-capsule-470118-i5/cicd-artifact-repo/bishopllc-storefront-app@sha256:c480f7fcb917751bd98622bad74ffdeff79f27db203c6df179aa548a9b9d7c64"           # full image *with* digest, e.g. us-east1-docker.pkg.dev/PROJECT/REPO/IMAGE@sha256:...
-  _ATTESTOR: "projects/warm-capsule-470118-i5/attestors/itsec-approvers"        # attestor resource, e.g. itsec-approver
-  _ATTESTOR_PROJECT: "warm-capsule-470118-i5" # attestor project i.e. warm-capsule-470118-i5
+  _REPO_PATH_PREFIX: "us-east1-docker.pkg.dev/warm-capsule-470118-i5/cicd-artifact-repo/bishopllc-storefront-app"
+  _ATTESTOR: "itsec-approver"
+  _ATTESTOR_PROJECT: "warm-capsule-470118-i5"
   _KEY_LOCATION: "us-east1"
   _KEYRING: "binauthz-keys"
   _KEY: "itsec-approver"
   _KEY_VERSION: "1"
 
-options:
-  logging: CLOUD_LOGGING_ONLY
+options: { logging: CLOUD_LOGGING_ONLY }
+
+# Optional: two-person rule before signing
+approvals:
+- approvers:
+  - group:it-security@YOURDOMAIN.com      # Only Security can approve
 
 steps:
-  # 1) Sanity check inputs
-  - id: "validate inputs"
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: bash
-    args:
-      - -ceu
-      - |
-        [[ -n "$_IMAGE" && "$_IMAGE" == *"@sha256:"* ]] || { echo "ERROR: _IMAGE must include @sha256:..."; exit 2; }
-        [[ -n "$_ATTESTOR" ]] || { echo "ERROR: _ATTESTOR is required"; exit 2; }
+- id: "extract image@digest from event"
+  name: gcr.io/google.com/cloudsdktool/cloud-sdk
+  entrypoint: bash
+  args:
+    - -ceu
+    - |
+      # Cloud Build injects the Pub/Sub payload into $BUILD_TRIGGER_MESSAGE
+      # Artifact Registry publish event payload has fields like "tag", "version", "package", and "registry"
+      # For container images, you’ll get the full *version* which includes the digest.
+      echo "$BUILD_TRIGGER_MESSAGE" | tee /workspace/event.json
 
-  - id: "sign and create attestation (idempotent)"
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: bash
-    args:
-      - -ceu
-      - |
-        # Look for an existing attestation for this attestor+digest
-        EXIST=$$(gcloud container binauthz attestations list \
-          --artifact-url="$_IMAGE" \
-          --attestor="$_ATTESTOR" \
-          --attestor-project="$_ATTESTOR_PROJECT" \
-          --format="value(name)" || true)
-  
-        if [[ -n "$$EXIST" ]]; then
-          echo "Attestation already exists ($$EXIST); skipping create."
-        else
-          gcloud beta container binauthz attestations sign-and-create \
-            --artifact-url="$_IMAGE" \
-            --attestor="$_ATTESTOR" \
-            --attestor-project="$_ATTESTOR_PROJECT" \
-            --keyversion-project="$PROJECT_ID" \
-            --keyversion-location="$_KEY_LOCATION" \
-            --keyversion-keyring="$_KEYRING" \
-            --keyversion-key="$_KEY" \
-            --keyversion="$_KEY_VERSION" \
-            --format="json"
+      # Try to pull out an image URI with digest; adjust jq paths if your payload differs
+      IMAGE=$(
+        jq -r '
+          .version | select(test("@sha256:")) // empty
+        ' /workspace/event.json
+      )
+
+      # If the payload only has repo+tag, resolve to digest:
+      if [[ -z "$IMAGE" ]]; then
+        PKG=$(jq -r '.package' /workspace/event.json)   # e.g. projects/.../locations/.../repositories/.../packages/...
+        TAG=$(jq -r '.tag // empty' /workspace/event.json)
+        if [[ -n "$TAG" && "$TAG" != "null" ]]; then
+          REF="$_REPO_PATH_PREFIX:$TAG"
+          DIGEST=$(gcloud artifacts docker images describe "$REF" --format='get(image_summary.digest)')
+          IMAGE="$_REPO_PATH_PREFIX@$DIGEST"
         fi
+      fi
 
+      [[ -n "$IMAGE" ]] || { echo "Could not determine image@digest from event"; exit 2; }
+      echo "IMAGE=$IMAGE" | tee /workspace/approved.txt
 
-  # 3) List the attestation we just created (for audit visibility in logs)
-  - id: "list attestation"
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: bash
-    args:
-      - -ceu
-      - |
-        gcloud container binauthz attestations list \
-          --artifact-url="$_IMAGE" \
-          --attestor="$_ATTESTOR" \
-          --format="table(CREATE_TIME,RESOURCE_URI,PROJECT_ID)"
+- id: "sign-and-create (after Security approval)"
+  name: gcr.io/google.com/cloudsdktool/cloud-sdk
+  waitFor: ["-"]
+  entrypoint: bash
+  args:
+    - -ceu
+    - |
+      source /workspace/approved.txt
+      gcloud beta container binauthz attestations sign-and-create \
+        --artifact-url="$IMAGE" \
+        --attestor="$_ATTESTOR" \
+        --attestor-project="$_ATTESTOR_PROJECT" \
+        --keyversion-project="$PROJECT_ID" \
+        --keyversion-location="$_KEY_LOCATION" \
+        --keyversion-keyring="$_KEYRING" \
+        --keyversion-key="$_KEY" \
+        --keyversion="$_KEY_VERSION" \
+        --format=json
+
+- id: "list attestation (audit)"
+  name: gcr.io/google.com/cloudsdktool/cloud-sdk
+  entrypoint: bash
+  args:
+    - -ceu
+    - |
+      source /workspace/approved.txt
+      gcloud container binauthz attestations list \
+        --artifact-url="$IMAGE" \
+        --attestor="$_ATTESTOR" \
+        --attestor-project="$_ATTESTOR_PROJECT" \
+        --format="table(CREATE_TIME,RESOURCE_URI,PROJECT_ID)"
