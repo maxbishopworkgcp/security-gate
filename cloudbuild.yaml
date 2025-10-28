@@ -25,32 +25,32 @@ steps:
         [[ -n "$_ATTESTOR" ]] || { echo "ERROR: _ATTESTOR is required"; exit 2; }
 
   - id: "sign and create attestation (idempotent)"
-  name: gcr.io/google.com/cloudsdktool/cloud-sdk
-  entrypoint: bash
-  args:
-    - -ceu
-    - |
-      # Look for an existing attestation for this attestor+digest
-      EXIST=$$(gcloud container binauthz attestations list \
-        --artifact-url="$_IMAGE" \
-        --attestor="$_ATTESTOR" \
-        --attestor-project="$_ATTESTOR_PROJECT" \
-        --format="value(name)" || true)
-
-      if [[ -n "$$EXIST" ]]; then
-        echo "Attestation already exists ($$EXIST); skipping create."
-      else
-        gcloud beta container binauthz attestations sign-and-create \
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        # Look for an existing attestation for this attestor+digest
+        EXIST=$$(gcloud container binauthz attestations list \
           --artifact-url="$_IMAGE" \
           --attestor="$_ATTESTOR" \
           --attestor-project="$_ATTESTOR_PROJECT" \
-          --keyversion-project="$PROJECT_ID" \
-          --keyversion-location="$_KEY_LOCATION" \
-          --keyversion-keyring="$_KEYRING" \
-          --keyversion-key="$_KEY" \
-          --keyversion="$_KEY_VERSION" \
-          --format="json"
-      fi
+          --format="value(name)" || true)
+  
+        if [[ -n "$$EXIST" ]]; then
+          echo "Attestation already exists ($$EXIST); skipping create."
+        else
+          gcloud beta container binauthz attestations sign-and-create \
+            --artifact-url="$_IMAGE" \
+            --attestor="$_ATTESTOR" \
+            --attestor-project="$_ATTESTOR_PROJECT" \
+            --keyversion-project="$PROJECT_ID" \
+            --keyversion-location="$_KEY_LOCATION" \
+            --keyversion-keyring="$_KEYRING" \
+            --keyversion-key="$_KEY" \
+            --keyversion="$_KEY_VERSION" \
+            --format="json"
+        fi
 
 
   # 3) List the attestation we just created (for audit visibility in logs)
