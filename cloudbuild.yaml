@@ -15,37 +15,19 @@ approvals:
   - maxbishop.work.gcp@gmail.com      # Only Security can approve
 
 steps:
-- id: "extract image@digest from event"
+
+# first step (grab IMAGE from PubSub)
+- id: "extract image@digest from images.built event"
   name: gcr.io/google.com/cloudsdktool/cloud-sdk
   entrypoint: bash
   args:
     - -ceu
     - |
-      # Cloud Build injects the Pub/Sub payload into $BUILD_TRIGGER_MESSAGE
-      # Artifact Registry publish event payload has fields like "tag", "version", "package", and "registry"
-      # For container images, you’ll get the full *version* which includes the digest.
       echo "$BUILD_TRIGGER_MESSAGE" | tee /workspace/event.json
-
-      # Try to pull out an image URI with digest; adjust jq paths if your payload differs
-      IMAGE=$(
-        jq -r '
-          .version | select(test("@sha256:")) // empty
-        ' /workspace/event.json
-      )
-
-      # If the payload only has repo+tag, resolve to digest:
-      if [[ -z "$IMAGE" ]]; then
-        PKG=$(jq -r '.package' /workspace/event.json)   # e.g. projects/.../locations/.../repositories/.../packages/...
-        TAG=$(jq -r '.tag // empty' /workspace/event.json)
-        if [[ -n "$TAG" && "$TAG" != "null" ]]; then
-          REF="$_REPO_PATH_PREFIX:$TAG"
-          DIGEST=$(gcloud artifacts docker images describe "$REF" --format='get(image_summary.digest)')
-          IMAGE="$_REPO_PATH_PREFIX@$DIGEST"
-        fi
-      fi
-
-      [[ -n "$IMAGE" ]] || { echo "Could not determine image@digest from event"; exit 2; }
+      IMAGE=$(jq -r '.image // empty' /workspace/event.json)
+      [[ -n "$IMAGE" ]] || { echo "Event missing .image"; cat /workspace/event.json; exit 2; }
       echo "IMAGE=$IMAGE" | tee /workspace/approved.txt
+
 
 - id: "sign-and-create (after Security approval)"
   name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -65,6 +47,17 @@ steps:
         --keyversion-key="$_KEY" \
         --keyversion="$_KEY_VERSION" \
         --format=json
+
+- id: "publish images.approved"
+  name: gcr.io/google.com/cloudsdktool/cloud-sdk
+  entrypoint: bash
+  args:
+    - -ceu
+    - |
+      source /workspace/approved.txt
+      gcloud pubsub topics publish images.approved \
+        --message="{\"image\":\"${IMAGE}\",\"attestor\":\"${_ATTESTOR}\",\"project\":\"${_ATTESTOR_PROJECT}\"}"
+
 
 - id: "list attestation (audit)"
   name: gcr.io/google.com/cloudsdktool/cloud-sdk
